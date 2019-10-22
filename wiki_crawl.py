@@ -3,47 +3,7 @@ from urllib.parse import urlparse
 import requests
 from queue import Queue
 from graphviz import Graph
-
-
-class LinkUtil:
-
-    @staticmethod
-    def is_anchor(link):
-        if len(link) > 0 and link[0] == '#':
-            return True
-        else:
-            return False
-
-    @staticmethod
-    def is_wiki_link(link):
-        return len(link) > 0 and link[0:6] == '/wiki/'
-
-    @staticmethod
-    def is_wiki_special_type(link):
-        return len(link) > 0 and (link[6:15] == 'Category:'
-                                  or link[6:14] == 'Special:'
-                                  or link[6:11] == 'Talk:'
-                                  or link[6:11] == 'Help:'
-                                  or link[6:11] == 'File:'
-                                  )
-
-    @staticmethod
-    def is_image(link):
-        return len(link) > 0 and (link[:-4] == '.png'
-                                  or link[:-4] == '.jpg'
-                                  or link[:-5] == '.jpeg'
-                                  )
-
-    @staticmethod
-    def is_active_link(link):
-        r = requests.get(link)
-        return 199 < r.status_code < 300
-
-    @staticmethod
-    def is_html_link(link):
-        r = requests.get(link)
-        h = r.headers['Content-Type']
-        return h[0:9] == 'text/html'
+from linkutilites import LinkUtil
 
 
 class Crawler:
@@ -61,9 +21,15 @@ class Crawler:
 
     @classmethod
     def new(cls):
+        '''
+        Builder method for constructing a Crawler.
+        '''
         return BuildCrawler(Crawler.__create_key)
 
     def retrieve_html(self):
+        '''
+        Used by the pull_processed_links function, gets the raw html
+        '''
 
         response = requests.get(self.url)
         body = response.content
@@ -76,6 +42,9 @@ class Crawler:
 
     @staticmethod
     def pull_processed_links(url):
+        '''
+        Takes all processed links
+        '''
 
         response = requests.get(url)
         body = response.content
@@ -92,12 +61,17 @@ class Crawler:
         for link in all_links:
             link = Crawler.process_link_in(link)
             if link:
+                Crawler.process_link_out(link)
+            if link:
                 page_links.add(link)
 
         return page_links
 
     @staticmethod
     def process_link_in(link):
+        '''
+        Processes the link to ensure that it fits the parameters.
+        '''
 
         if LinkUtil.is_anchor(link):
             return None
@@ -114,6 +88,9 @@ class Crawler:
 
     @staticmethod
     def process_link_out(link):
+        '''
+        Processes link.
+        '''
 
         if not LinkUtil.is_active_link(link):
             return None
@@ -122,16 +99,28 @@ class Crawler:
 
         return link
 
-    def write_relationship(self, parent, child):
+    def establish_graph(self):
+        '''
+        Initializes a graphviz graph
+        :return: the graph object.
+        '''
 
-        file = f"{self.url.replace('/', '_').replace(':', '_')}_relations.txt"
+        g = Graph('G',
+                  filename=f"network_graphs/{self.url.replace('/', '_').replace(':', '_')}_network.gv'",
+                  engine='sfdp'
+                  # format='.jpg'
+                  )
 
-        with open(f"page_relations/{file}", 'a+') as fout:
-            fout.write(f"   {parent} -> {child};\n")
+        return g
 
-        g = Graph('G', filename=f"{self.url.replace('/', '_').replace(':', '_')}_newtork.gv'", engine='sfdp')
+    @staticmethod
+    def write_relationship(g, parent, child):
+        '''
+        Creates a graph relationship in graphviz between a parent and a child node. (Creates each as a node
+        if they don't already exist.
+        '''
 
-        g.edge({parent}, {child})
+        g.edge(f"{parent}", f"{child}")
 
     def construct_url(self, link):
         """
@@ -139,34 +128,59 @@ class Crawler:
         """
         url = self.url
         parsedurl = urlparse(url)
-
         return parsedurl[0] + "://" + parsedurl[1] + link
 
+    @staticmethod
+    def deconstruct_url(url):
+        """
+        Takes a link's path and constucts the full URL based on the original website scheme and domain.
+        """
+        parsedurl = urlparse(url)
+        return parsedurl[2]
+
+    @staticmethod
+    def view(g):
+        '''
+        Opens a graphviz.
+        '''
+
+        g.view()
+
     def run_crawler(self):
+        '''
+        Runs the crawler over all links.
+        Finishes by opening the Graph created.
+        '''
 
         q = self._queue
         q.put((self.url, 0))
+        g = Crawler.establish_graph(self)
 
         while q.qsize() > 0:
 
             item = q.get()
             url = item[0]
+            path = Crawler.deconstruct_url(url)
             layer = item[1]
+            print(f"Working on layer {layer}")
 
             links = Crawler.pull_processed_links(url)
 
             for link in links:
-
+                print(f"Adding {link}")
                 fulllink = Crawler.construct_url(self=self, link=link)
-                Crawler.write_relationship(self=self, parent=url, child=fulllink)
+                Crawler.write_relationship(g=g, parent=path, child=link)
 
-                if layer < self.depth:
+                if layer <= self.depth:
                     q.put((fulllink, layer + 1))
+
+        print("Success!")
+        Crawler.view(g)
 
 
 class BuildCrawler:
 
-    def __init__(self, create_key, url: str = "https://en.wikipedia.org/wiki/Tim_Berners-Lee", depth: int = 3):
+    def __init__(self, create_key, url: str = "https://en.wikipedia.org/wiki/Tim_Berners-Lee", depth: int = 2):
         self._create_key = create_key
         self.url = url
         self.depth = depth
@@ -195,6 +209,7 @@ class BuildCrawler:
 
 
 testc = Crawler.new()
+testc.with_url('https://en.wikipedia.org/wiki/')
 testc = testc.to_crawler()
 
 testc.run_crawler()
