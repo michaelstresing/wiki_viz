@@ -1,23 +1,30 @@
 from bs4 import BeautifulSoup as bs4
 from urllib.parse import urlparse
 import requests
-from queue import Queue
-from graphviz import Graph
+import queue
+import os
+
+import numpy
+import matplotlib.pyplot as plt
+from graphviz import Digraph
+import networkx as nx
+
 from linkutilites import LinkUtil
 
 
 class Crawler:
 
-    def __init__(self, create_key, url, depth):
+    __create_key = object()
+
+    def __init__(self, create_key, url, depth, width):
 
         assert (create_key == Crawler.__create_key),\
             "A Crawler object must be constructed using the .new() method."
 
         self.url = url
         self.depth = depth
-        self._queue = Queue()
-
-    __create_key = object()
+        self.width = width
+        self._queue = queue.Queue()
 
     @classmethod
     def new(cls):
@@ -26,20 +33,6 @@ class Crawler:
         '''
         return BuildCrawler(Crawler.__create_key)
 
-    def retrieve_html(self):
-        '''
-        Used by the pull_processed_links function, gets the raw html
-        '''
-
-        response = requests.get(self.url)
-        body = response.content
-        soup = bs4(body, "html.parser")
-
-        if 199 < response.status_code < 300:
-            return soup
-        else:
-            assert "Invalid Request"
-
     @staticmethod
     def pull_processed_links(url):
         '''
@@ -47,8 +40,9 @@ class Crawler:
         '''
 
         response = requests.get(url)
-        body = response.content
-        soup = bs4(body, "html.parser")
+        page = response.content
+        soup = bs4(page, "html.parser")
+        body = soup.find(id='bodyContent')
 
         if 199 < response.status_code < 300:
             pass
@@ -56,16 +50,25 @@ class Crawler:
             assert "Invalid Request"
 
         page_links = set()
-        all_links = [a.get('href') for a in soup.find_all("a", href=True)]
+        page_links_sanatized = set()
+        all_links = [a.get('href') for a in body.find_all("a", href=True)]
 
         for link in all_links:
+
             link = Crawler.process_link_in(link)
-            if link:
-                Crawler.process_link_out(link)
+
             if link:
                 page_links.add(link)
 
-        return page_links
+        for link in list(page_links):
+
+            if "#" in link:
+
+                hashindex = link.index("#")
+                sanlink = link[0:hashindex]
+                page_links_sanatized.add(sanlink)
+
+        return page_links_sanatized
 
     @staticmethod
     def process_link_in(link):
@@ -82,8 +85,6 @@ class Crawler:
         elif LinkUtil.is_image(link):
             return None
 
-        # more link processing and filtering
-
         return link
 
     @staticmethod
@@ -99,29 +100,6 @@ class Crawler:
 
         return link
 
-    def establish_graph(self):
-        '''
-        Initializes a graphviz graph
-        :return: the graph object.
-        '''
-
-        g = Graph('G',
-                  filename=f"network_graphs/{self.url.replace('/', '_').replace(':', '_')}_network.gv'",
-                  engine='sfdp'
-                  # format='.jpg'
-                  )
-
-        return g
-
-    @staticmethod
-    def write_relationship(g, parent, child):
-        '''
-        Creates a graph relationship in graphviz between a parent and a child node. (Creates each as a node
-        if they don't already exist.
-        '''
-
-        g.edge(f"{parent}", f"{child}")
-
     def construct_url(self, link):
         """
         Takes a link's path and constucts the full URL based on the original website scheme and domain.
@@ -130,60 +108,90 @@ class Crawler:
         parsedurl = urlparse(url)
         return parsedurl[0] + "://" + parsedurl[1] + link
 
-    @staticmethod
-    def deconstruct_url(url):
-        """
-        Takes a link's path and constucts the full URL based on the original website scheme and domain.
-        """
-        parsedurl = urlparse(url)
-        return parsedurl[2]
-
-    @staticmethod
-    def view(g):
-        '''
-        Opens a graphviz.
-        '''
-
-        g.view()
-
-    def run_crawler(self):
+    def run_crawler_graphviz(self):
         '''
         Runs the crawler over all links.
-        Finishes by opening the Graph created.
+        :return: Graph object for graphviz
         '''
 
         q = self._queue
         q.put((self.url, 0))
-        g = Crawler.establish_graph(self)
+        graph = Visualization.establish_graph_graphviz(self)
 
-        while q.qsize() > 0:
+        while self._queue.qsize() > 0:
 
             item = q.get()
             url = item[0]
-            path = Crawler.deconstruct_url(url)
+            path = LinkUtil.deconstruct_url(url)
             layer = item[1]
             print(f"Working on layer {layer}")
 
             links = Crawler.pull_processed_links(url)
 
+            if len(links) > self.width:
+                links = numpy.random.choice(list(links), self.width, replace=False)
+
             for link in links:
                 print(f"Adding {link}")
                 fulllink = Crawler.construct_url(self=self, link=link)
-                Crawler.write_relationship(g=g, parent=path, child=link)
+                Visualization.write_relationship_graphviz(g=graph, parent=path, child=link)
 
-                if layer <= self.depth:
+                if layer < self.depth:
                     q.put((fulllink, layer + 1))
 
         print("Success!")
-        Crawler.view(g)
+        Visualization.view_with_graphviz(self, graph)
+
+        return graph
+
+    def run_crawler_plt(self):
+        '''
+        Runs the crawler over all links.
+        :return: Graph object for networkx and pyplot.
+        '''
+
+        q = self._queue
+        q.put((self.url, 0))
+        graph = Visualization.establish_graph_nx()
+
+        while self._queue.qsize() > 0:
+
+            item = q.get()
+            url = item[0]
+            path = LinkUtil.deconstruct_url(url)
+            layer = item[1]
+            print(f"Working on layer {layer}")
+
+            links = Crawler.pull_processed_links(url)
+
+            if len(links) > self.width:
+                links = numpy.random.choice(list(links), self.width, replace=False)
+
+            for link in links:
+                print(f"Adding {link}")
+                fulllink = Crawler.construct_url(self=self, link=link)
+                Visualization.write_relationship_nx(g=graph, parent=path, child=link)
+
+                if layer < self.depth:
+                    q.put((fulllink, layer + 1))
+
+        print("Success!")
+        return graph
 
 
 class BuildCrawler:
 
-    def __init__(self, create_key, url: str = "https://en.wikipedia.org/wiki/Tim_Berners-Lee", depth: int = 2):
+    def __init__(self,
+                 create_key,
+                 url: str = "https://en.wikipedia.org/wiki/Tim_Berners-Lee",
+                 depth: int = 3,
+                 width: int = 3
+                 ):
+
         self._create_key = create_key
         self.url = url
         self.depth = depth
+        self.width = width
 
     def with_url(self, url):
         """
@@ -197,6 +205,12 @@ class BuildCrawler:
         """
         self.depth = depth
 
+    def with_width(self, width):
+        """
+        Inserts a url.
+        """
+        self.width = width
+
     def to_crawler(self):
         """
         Create a Crawler object from the builder
@@ -204,12 +218,105 @@ class BuildCrawler:
         return Crawler(
             create_key=self._create_key,
             url=self.url,
-            depth=self.depth
+            depth=self.depth,
+            width=self.width
             )
 
 
-testc = Crawler.new()
-testc.with_url('https://en.wikipedia.org/wiki/')
-testc = testc.to_crawler()
+class Visualization:
 
-testc.run_crawler()
+    @staticmethod
+    def establish_graph_graphviz(crawler):
+        '''
+        Initializes a graphviz strict digraph.
+        :return: the graph object.
+        '''
+
+        g = Digraph('G',
+                    filename=f"network_graphs/{crawler.url.replace('/', '_').replace(':', '_')}_network",
+                    engine='sfdp',
+                    format='png',
+                    node_attr={
+                        'color': 'blue',
+                        'shape': 'circle',
+                        },
+                    strict=True
+                    )
+
+        return g
+
+    @staticmethod
+    def establish_graph_nx():
+        '''
+        Initializes a graphviz graph
+        :return: the graph object.
+        '''
+
+        g = nx.Graph()
+        return g
+
+    @staticmethod
+    def write_relationship_graphviz(g, parent, child):
+        '''
+        Creates a graph relationship in graphviz between a parent and a child node. (Creates each as a node
+        if they don't already exist.
+        '''
+
+        # pvalue = hash(parent)
+        # cvalue = hash(child)
+
+        # g.node(int(pvalue), label=str(parent))
+        # g.node(int(cvalue), label=str(child))
+
+        strippedparent = LinkUtil.remove_wiki_from_path(parent)
+        strippedchild = LinkUtil.remove_wiki_from_path(child)
+
+        g.edge(f"{strippedparent}", f"{strippedchild}")
+
+    @staticmethod
+    def write_relationship_nx(g, parent, child):
+        '''
+        Creates a graph relationship in networkx between a parent and a child node. (Creates each as a node
+        if they don't already exist.
+        '''
+        strippedparent = LinkUtil.remove_wiki_from_path(parent)
+        strippedchild = LinkUtil.remove_wiki_from_path(child)
+
+        g.add_node(strippedparent)
+        g.add_node(strippedchild)
+
+        g.add_edge(strippedparent, strippedchild)
+
+    @staticmethod
+    def view_with_plt(g):
+        '''
+        Opens a graphviz.
+        '''
+
+        nx.draw(g, with_labels=True)
+        plt.show()
+
+    @staticmethod
+    def view_with_graphviz(crawler, g):
+
+        g.render(f"network_graphs/{crawler.url.replace('/', '_').replace(':', '_')}_network", view=True)
+
+
+# viztype = (input("(g)raphviz or (n)x: "))
+
+outputtype = os.environ.get("WIKI_CRAWL_OUTPUT")
+
+if outputtype == 'nx':
+
+    testc = Crawler.new()
+    testc = testc.to_crawler()
+
+    g= testc.run_crawler_plt()
+    Visualization.view_with_plt(g)
+
+else:
+
+    testc = Crawler.new()
+    testc = testc.to_crawler()
+
+    testc.run_crawler_graphviz()
