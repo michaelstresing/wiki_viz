@@ -3,12 +3,10 @@ from urllib.parse import urlparse
 import requests
 import queue
 import os
-
 import numpy
 import matplotlib.pyplot as plt
 from graphviz import Digraph
 import networkx as nx
-
 from linkutilites import LinkUtil
 
 
@@ -114,18 +112,21 @@ class Crawler:
         :return: Graph object for graphviz
         '''
 
+        # Setup a queue and add the starting point URL
         q = self._queue
         q.put((self.url, 0))
         graph = Visualization.establish_graph_graphviz(self)
 
+        # Process links and add to queue, whilst queue not empty
         while self._queue.qsize() > 0:
 
             item = q.get()
             url = item[0]
             path = LinkUtil.deconstruct_url(url)
             layer = item[1]
-            print(f"Working on layer {layer}")
 
+            if url:
+                print(f"Working on layer {layer}")
             links = Crawler.pull_processed_links(url)
 
             if len(links) > self.width:
@@ -183,9 +184,9 @@ class BuildCrawler:
 
     def __init__(self,
                  create_key,
-                 url: str = "https://en.wikipedia.org/wiki/Tim_Berners-Lee",
+                 url: str = "https://en.wikipedia.org/wiki/Kraftwerk",
                  depth: int = 3,
-                 width: int = 3
+                 width: int = 4
                  ):
 
         self._create_key = create_key
@@ -197,19 +198,34 @@ class BuildCrawler:
         """
         Inserts a url.
         """
-        self.url = url
+        return BuildCrawler(
+                    create_key = self._create_key,
+                    url = url,
+                    depth = self.depth,
+                    width = self.width
+                    ) 
 
     def with_depth(self, depth):
         """
         Inserts a depth value.
         """
-        self.depth = depth
+        return BuildCrawler(
+                    create_key = self._create_key,
+                    url = self.url,
+                    depth = depth,
+                    width = self.width
+                    ) 
 
     def with_width(self, width):
         """
         Inserts a url.
         """
-        self.width = width
+        return BuildCrawler(
+                    create_key = self._create_key,
+                    url = self.url,
+                    depth = self.depth,
+                    width = width
+                    ) 
 
     def to_crawler(self):
         """
@@ -248,7 +264,7 @@ class Visualization:
     @staticmethod
     def establish_graph_nx():
         '''
-        Initializes a graphviz graph
+        Initializes a nx/plt graph
         :return: the graph object.
         '''
 
@@ -290,7 +306,7 @@ class Visualization:
     @staticmethod
     def view_with_plt(g):
         '''
-        Opens a graphviz.
+        Opens the nx/plt graph.
         '''
 
         nx.draw(g, with_labels=True)
@@ -298,25 +314,8 @@ class Visualization:
 
     @staticmethod
     def view_with_graphviz(crawler, g):
+        '''
+        Opens the graphviz file
+        '''
 
         g.render(f"network_graphs/{crawler.url.replace('/', '_').replace(':', '_')}_network", view=True)
-
-
-# viztype = (input("(g)raphviz or (n)x: "))
-
-outputtype = os.environ.get("WIKI_CRAWL_OUTPUT")
-
-if outputtype == 'nx':
-
-    testc = Crawler.new()
-    testc = testc.to_crawler()
-
-    g= testc.run_crawler_plt()
-    Visualization.view_with_plt(g)
-
-else:
-
-    testc = Crawler.new()
-    testc = testc.to_crawler()
-
-    testc.run_crawler_graphviz()
